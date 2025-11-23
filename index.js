@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const Razorpay = require('razorpay');
+const crypto = require('crypto');
 
 const app = express();
 app.use(express.json());
@@ -26,6 +27,14 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+// Razorpay Configuration
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+// Validation
 if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
   console.error('❌ Missing required Twilio environment variables!');
   process.exit(1);
@@ -34,21 +43,10 @@ if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
 console.log('✅ Twilio configured');
 if (!REMOVEBG_API_KEY) console.warn('⚠️  REMOVEBG_API_KEY not set');
 if (!process.env.CLOUDINARY_CLOUD_NAME) console.warn('⚠️  Cloudinary not set');
-if (!MONGODB_URI) console.warn('⚠️  MONGODB_URI not set - data will not persist');
+if (!MONGODB_URI) console.warn('⚠️  MONGODB_URI not set');
+if (process.env.RAZORPAY_KEY_ID) console.log('✅ Razorpay configured');
 
 const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-
-// Razorpay Configuration
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
-});
-
-if (process.env.RAZORPAY_KEY_ID) {
-  console.log('✅ Razorpay configured');
-} else {
-  console.warn('⚠️  Razorpay not configured - payments will not work');
-}
 
 // MongoDB Connection
 if (MONGODB_URI) {
@@ -88,7 +86,6 @@ async function getUserData(phoneNumber) {
       await user.save();
       console.log(`👤 New user: ${phoneNumber}`);
     } else {
-      // Check if month reset needed
       const now = new Date();
       if (now >= user.resetDate) {
         user.imagesProcessed = 0;
@@ -197,25 +194,16 @@ app.post('/create-order', async (req, res) => {
     }
     
     const options = {
-      amount: 99900, // ₹999 in paise
+      amount: 99900,
       currency: 'INR',
       receipt: `premium_${phoneNumber}_${Date.now()}`,
-      notes: {
-        phoneNumber,
-        description: 'WhatsApp BG Remover Premium'
-      }
+      notes: { phoneNumber, description: 'WhatsApp BG Remover Premium' }
     };
     
     const order = await razorpay.orders.create(options);
-    
     console.log(`💳 Payment order created for ${phoneNumber}:`, order.id);
     
-    res.json({
-      success: true,
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency
-    });
+    res.json({ success: true, orderId: order.id, amount: order.amount, currency: order.currency });
   } catch (error) {
     console.error('❌ Order creation error:', error.message);
     res.status(500).json({ error: error.message });
@@ -227,7 +215,6 @@ app.post('/verify-payment', async (req, res) => {
   try {
     const { orderId, paymentId, signature, phoneNumber } = req.body;
     
-    const crypto = require('crypto');
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
     hmac.update(orderId + '|' + paymentId);
     const generated_signature = hmac.digest('hex');
@@ -236,17 +223,15 @@ app.post('/verify-payment', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid signature' });
     }
     
-    // Payment verified - update user to premium
     const user = await User.findOne({ phoneNumber });
     if (user) {
       user.tier = 'premium';
-      user.imagesProcessed = 0; // Reset counter
+      user.imagesProcessed = 0;
       user.subscriptionId = paymentId;
       user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
       await user.save();
       
       console.log(`⭐ User ${phoneNumber} upgraded to Premium!`);
-      
       return res.json({ success: true, message: 'Payment verified, you are now Premium!' });
     }
     
@@ -256,6 +241,9 @@ app.post('/verify-payment', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Main webhook
+app.post('/webhook', async (req, res) => {
   try {
     const from = req.body.From?.replace('whatsapp:', '');
     const to = req.body.To?.replace('whatsapp:', '');
@@ -340,19 +328,18 @@ app.post('/verify-payment', async (req, res) => {
     }
     else if (incomingMsg === 'upgrade') {
       await sendWhatsAppMessage(from,
-        `⭐ *Premium Plan*\n\n✅ 100 images/month\n✅ Priority processing\n✅ HD quality\n\n💰 ₹999/month\n\n🔗 Pay here: ${process.env.RAZORPAY_KEY_ID ? 'Coming in next message' : 'Not available'}\n\nReply CONFIRM to proceed`,
+        `⭐ *Premium Plan - ₹999/month*\n\n✅ 100 images/month\n✅ Priority processing\n✅ HD quality\n\n💳 Reply CONFIRM to pay`,
         botNumber
       );
     }
     else if (incomingMsg === 'confirm') {
       if (!process.env.RAZORPAY_KEY_ID) {
-        await sendWhatsAppMessage(from, '❌ Payments not configured yet', botNumber);
+        await sendWhatsAppMessage(from, '❌ Payments not configured', botNumber);
         return res.status(200).send('OK');
       }
       
       try {
-        // Create payment order
-        const response = await axios.post('http://localhost:3000/create-order', { phoneNumber: from });
+        const response = await axios.post(`https://${process.env.RAILWAY_DOMAIN || 'localhost:3000'}/create-order`, { phoneNumber: from });
         const { orderId } = response.data;
         
         await sendWhatsAppMessage(from,
@@ -360,15 +347,14 @@ app.post('/verify-payment', async (req, res) => {
           botNumber
         );
       } catch (error) {
-        await sendWhatsAppMessage(from, `❌ Error creating payment: ${error.message}`, botNumber);
+        await sendWhatsAppMessage(from, `❌ Error: ${error.message}`, botNumber);
       }
     }
     else if (incomingMsg === 'verify') {
-      const user = await getUserData(from);
-      if (user && user.tier === 'premium') {
-        await sendWhatsAppMessage(from, `✅ You're already Premium!\n\n100 images/month available 🎉`, botNumber);
+      if (user.tier === 'premium') {
+        await sendWhatsAppMessage(from, `✅ You're Premium!\n\n100 images/month available 🎉`, botNumber);
       } else {
-        await sendWhatsAppMessage(from, `⏳ Verifying payment... Please wait`, botNumber);
+        await sendWhatsAppMessage(from, `⏳ Verifying payment...`, botNumber);
       }
     }
     else {
