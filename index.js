@@ -339,11 +339,19 @@ app.post('/webhook', async (req, res) => {
       }
       
       try {
-        const response = await axios.post(`https://${process.env.RAILWAY_DOMAIN || 'localhost:3000'}/create-order`, { phoneNumber: from });
-        const { orderId } = response.data;
+        // Create order directly instead of HTTP request
+        const options = {
+          amount: 99900,
+          currency: 'INR',
+          receipt: `premium_${from}_${Date.now()}`,
+          notes: { phoneNumber: from, description: 'WhatsApp BG Remover Premium' }
+        };
+        
+        const order = await razorpay.orders.create(options);
+        console.log(`💳 Payment order created for ${from}:`, order.id);
         
         await sendWhatsAppMessage(from,
-          `💳 *Payment Link*\n\n🔗 https://rzp.io/i/${orderId}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
+          `💳 *Payment Link*\n\n🔗 https://rzp.io/i/${order.id}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
           botNumber
         );
       } catch (error) {
