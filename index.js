@@ -7,6 +7,7 @@ const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+const Razorpay = require('razorpay');
 
 const app = express();
 app.use(express.json());
@@ -25,8 +26,6 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
-
-// Validation
 if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
   console.error('❌ Missing required Twilio environment variables!');
   process.exit(1);
@@ -38,6 +37,18 @@ if (!process.env.CLOUDINARY_CLOUD_NAME) console.warn('⚠️  Cloudinary not set
 if (!MONGODB_URI) console.warn('⚠️  MONGODB_URI not set - data will not persist');
 
 const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+
+// Razorpay Configuration
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+if (process.env.RAZORPAY_KEY_ID) {
+  console.log('✅ Razorpay configured');
+} else {
+  console.warn('⚠️  Razorpay not configured - payments will not work');
+}
 
 // MongoDB Connection
 if (MONGODB_URI) {
@@ -176,8 +187,75 @@ async function sendWhatsAppImage(to, imageUrl, caption, botNumber) {
   }
 }
 
-// Main webhook
-app.post('/webhook', async (req, res) => {
+// Create Razorpay payment order
+app.post('/create-order', async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'Phone number required' });
+    }
+    
+    const options = {
+      amount: 99900, // ₹999 in paise
+      currency: 'INR',
+      receipt: `premium_${phoneNumber}_${Date.now()}`,
+      notes: {
+        phoneNumber,
+        description: 'WhatsApp BG Remover Premium'
+      }
+    };
+    
+    const order = await razorpay.orders.create(options);
+    
+    console.log(`💳 Payment order created for ${phoneNumber}:`, order.id);
+    
+    res.json({
+      success: true,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency
+    });
+  } catch (error) {
+    console.error('❌ Order creation error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify payment
+app.post('/verify-payment', async (req, res) => {
+  try {
+    const { orderId, paymentId, signature, phoneNumber } = req.body;
+    
+    const crypto = require('crypto');
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(orderId + '|' + paymentId);
+    const generated_signature = hmac.digest('hex');
+    
+    if (generated_signature !== signature) {
+      return res.status(400).json({ success: false, error: 'Invalid signature' });
+    }
+    
+    // Payment verified - update user to premium
+    const user = await User.findOne({ phoneNumber });
+    if (user) {
+      user.tier = 'premium';
+      user.imagesProcessed = 0; // Reset counter
+      user.subscriptionId = paymentId;
+      user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+      await user.save();
+      
+      console.log(`⭐ User ${phoneNumber} upgraded to Premium!`);
+      
+      return res.json({ success: true, message: 'Payment verified, you are now Premium!' });
+    }
+    
+    res.status(400).json({ success: false, error: 'User not found' });
+  } catch (error) {
+    console.error('❌ Payment verification error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
   try {
     const from = req.body.From?.replace('whatsapp:', '');
     const to = req.body.To?.replace('whatsapp:', '');
@@ -262,9 +340,36 @@ app.post('/webhook', async (req, res) => {
     }
     else if (incomingMsg === 'upgrade') {
       await sendWhatsAppMessage(from,
-        `⭐ *Premium Plan*\n\n✅ 100 images/month\n✅ Priority processing\n✅ HD quality\n\n💰 $9.99/month\n\nFeature coming soon!`,
+        `⭐ *Premium Plan*\n\n✅ 100 images/month\n✅ Priority processing\n✅ HD quality\n\n💰 ₹999/month\n\n🔗 Pay here: ${process.env.RAZORPAY_KEY_ID ? 'Coming in next message' : 'Not available'}\n\nReply CONFIRM to proceed`,
         botNumber
       );
+    }
+    else if (incomingMsg === 'confirm') {
+      if (!process.env.RAZORPAY_KEY_ID) {
+        await sendWhatsAppMessage(from, '❌ Payments not configured yet', botNumber);
+        return res.status(200).send('OK');
+      }
+      
+      try {
+        // Create payment order
+        const response = await axios.post('http://localhost:3000/create-order', { phoneNumber: from });
+        const { orderId } = response.data;
+        
+        await sendWhatsAppMessage(from,
+          `💳 *Payment Link*\n\n🔗 https://rzp.io/i/${orderId}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
+          botNumber
+        );
+      } catch (error) {
+        await sendWhatsAppMessage(from, `❌ Error creating payment: ${error.message}`, botNumber);
+      }
+    }
+    else if (incomingMsg === 'verify') {
+      const user = await getUserData(from);
+      if (user && user.tier === 'premium') {
+        await sendWhatsAppMessage(from, `✅ You're already Premium!\n\n100 images/month available 🎉`, botNumber);
+      } else {
+        await sendWhatsAppMessage(from, `⏳ Verifying payment... Please wait`, botNumber);
+      }
     }
     else {
       await sendWhatsAppMessage(from, '👋 Send me an image to remove its background!\n\nType HELP for more.', botNumber);
