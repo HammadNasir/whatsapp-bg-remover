@@ -194,6 +194,14 @@ app.post('/verify-payment', async (req, res) => {
       user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
       await user.save();
       console.log(`⭐ ${phoneNumber} upgraded to Premium!`);
+      
+      // Send WhatsApp notification
+      const botNumber = TWILIO_WHATSAPP_NUMBER || '+14155238886';
+      await sendMessage(phoneNumber.replace(/^91/, '+91'), 
+        `✅ *Payment Successful!*\n\nYou are now Premium! 🎉\n\n100 images/month available\n\nStart removing backgrounds!`, 
+        botNumber
+      );
+      
       return res.json({ success: true, message: 'Payment verified!' });
     }
     res.status(400).json({ success: false, error: 'User not found' });
