@@ -350,10 +350,12 @@ app.post('/webhook', async (req, res) => {
       const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
       await sendMessage(from, `💳 Pay here:\n${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
     } else if (msg === 'verify') {
-      if (user.tier === 'premium') {
-        await sendMessage(from, `✅ You're Premium! 100 images/month`, botNumber);
+      // Refresh user data from database
+      const updatedUser = await getUserData(from);
+      if (updatedUser && updatedUser.tier === 'premium') {
+        await sendMessage(from, `✅ *Payment Verified!*\n\nYou're now Premium! 🎉\n100 images/month available\n\nStart sending images!`, botNumber);
       } else {
-        await sendMessage(from, `⏳ Verifying...`, botNumber);
+        await sendMessage(from, `⏳ Payment still processing. Try again in a moment.\n\nOr send UPGRADE to try again.`, botNumber);
       }
     } else {
       await sendMessage(from, `👋 Send an image to remove background\n\nType HELP for commands`, botNumber);
