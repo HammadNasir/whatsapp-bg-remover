@@ -21,60 +21,50 @@ const TWILIO_WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER;
 const REMOVEBG_API_KEY = process.env.REMOVEBG_API_KEY;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// Cloudinary Configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Razorpay Configuration
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// Validation
 if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
-  console.error('❌ Missing required Twilio environment variables!');
+  console.error('❌ Missing Twilio credentials');
   process.exit(1);
 }
 
 console.log('✅ Twilio configured');
-if (!REMOVEBG_API_KEY) console.warn('⚠️  REMOVEBG_API_KEY not set');
-if (!process.env.CLOUDINARY_CLOUD_NAME) console.warn('⚠️  Cloudinary not set');
-if (!MONGODB_URI) console.warn('⚠️  MONGODB_URI not set');
 if (process.env.RAZORPAY_KEY_ID) console.log('✅ Razorpay configured');
+if (process.env.CLOUDINARY_CLOUD_NAME) console.log('✅ Cloudinary configured');
 
 const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
-// MongoDB Connection
+// MongoDB
 if (MONGODB_URI) {
   mongoose.connect(MONGODB_URI)
-  .then(() => console.log('✅ Connected to MongoDB'))
+  .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('❌ MongoDB error:', err.message));
 }
 
-// User Schema
 const userSchema = new mongoose.Schema({
   phoneNumber: { type: String, unique: true, required: true },
   tier: { type: String, enum: ['free', 'premium'], default: 'free' },
   imagesProcessed: { type: Number, default: 0 },
   subscriptionId: { type: String, default: null },
   resetDate: { type: Date, default: () => new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1) },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now }
 });
 
 const User = mongoose.model('User', userSchema);
 
-// Get or create user
 async function getUserData(phoneNumber) {
   try {
     if (!User) return null;
-    
     let user = await User.findOne({ phoneNumber });
-    
     if (!user) {
       const now = new Date();
       user = new User({
@@ -93,7 +83,6 @@ async function getUserData(phoneNumber) {
         await user.save();
       }
     }
-    
     return user;
   } catch (error) {
     console.error('❌ getUserData error:', error.message);
@@ -101,29 +90,20 @@ async function getUserData(phoneNumber) {
   }
 }
 
-// Remove background from image
 async function removeBackground(imageUrl) {
   try {
-    if (!REMOVEBG_API_KEY) throw new Error('remove.bg API key not set');
-    
-    console.log('🔄 Fetching image...');
+    if (!REMOVEBG_API_KEY) throw new Error('remove.bg key not set');
     const imageResponse = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
       auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN }
     });
-    
-    console.log('📸 Sending to remove.bg...');
     const formData = new FormData();
     formData.append('image_file', Buffer.from(imageResponse.data), 'image.png');
     formData.append('size', 'auto');
-    formData.append('type', 'auto');
-    
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
       headers: { ...formData.getHeaders(), 'X-Api-Key': REMOVEBG_API_KEY },
       responseType: 'arraybuffer'
     });
-    
-    console.log('✅ Background removed');
     return Buffer.from(response.data, 'binary');
   } catch (error) {
     console.error('❌ removeBackground error:', error.message);
@@ -131,23 +111,17 @@ async function removeBackground(imageUrl) {
   }
 }
 
-// Upload image to Cloudinary
 async function uploadToCloudinary(imageBuffer, phoneNumber) {
   try {
-    if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not configured');
-    
-    console.log('☁️  Uploading to Cloudinary...');
+    if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not set');
     const tempPath = path.join(__dirname, `temp_${Date.now()}.png`);
     fs.writeFileSync(tempPath, imageBuffer);
-    
     const result = await cloudinary.uploader.upload(tempPath, {
       folder: 'whatsapp-bg-remover',
       public_id: `bg_${phoneNumber}_${Date.now()}`,
       format: 'png'
     });
-    
     fs.unlinkSync(tempPath);
-    console.log('✅ Uploaded to Cloudinary');
     return result.secure_url;
   } catch (error) {
     console.error('❌ uploadToCloudinary error:', error.message);
@@ -155,8 +129,7 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
   }
 }
 
-// Send WhatsApp message
-async function sendWhatsAppMessage(to, body, botNumber) {
+async function sendMessage(to, body, botNumber) {
   try {
     await client.messages.create({
       body,
@@ -165,12 +138,11 @@ async function sendWhatsAppMessage(to, body, botNumber) {
     });
     console.log(`✅ Message sent to ${to}`);
   } catch (error) {
-    console.error('❌ Send message error:', error.message);
+    console.error('❌ Send error:', error.message);
   }
 }
 
-// Send WhatsApp image
-async function sendWhatsAppImage(to, imageUrl, caption, botNumber) {
+async function sendImage(to, imageUrl, caption, botNumber) {
   try {
     await client.messages.create({
       body: caption,
@@ -184,53 +156,82 @@ async function sendWhatsAppImage(to, imageUrl, caption, botNumber) {
   }
 }
 
-// Payment page
+// Payment endpoints
+app.post('/create-order', async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) return res.status(400).json({ error: 'Phone required' });
+    
+    const options = {
+      amount: 99900,
+      currency: 'INR',
+      receipt: `premium_${phoneNumber}_${Date.now()}`,
+      notes: { phoneNumber }
+    };
+    
+    const order = await razorpay.orders.create(options);
+    res.json({ success: true, orderId: order.id, amount: order.amount, currency: order.currency });
+  } catch (error) {
+    console.error('❌ Order error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/verify-payment', async (req, res) => {
+  try {
+    const { orderId, paymentId, signature, phoneNumber } = req.body;
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(orderId + '|' + paymentId);
+    const generated = hmac.digest('hex');
+    
+    if (generated !== signature) return res.status(400).json({ success: false, error: 'Invalid' });
+    
+    const user = await User.findOne({ phoneNumber });
+    if (user) {
+      user.tier = 'premium';
+      user.imagesProcessed = 0;
+      user.subscriptionId = paymentId;
+      user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+      await user.save();
+      console.log(`⭐ ${phoneNumber} upgraded to Premium!`);
+      return res.json({ success: true, message: 'Payment verified!' });
+    }
+    res.status(400).json({ success: false, error: 'User not found' });
+  } catch (error) {
+    console.error('❌ Verify error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/pay/:phoneNumber', (req, res) => {
   const { phoneNumber } = req.params;
-  
-  const html = `
+  res.send(`
     <!DOCTYPE html>
     <html>
     <head>
       <title>WhatsApp BG Remover - Premium</title>
+      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
       <style>
         body { font-family: Arial; text-align: center; padding: 40px; background: #f5f5f5; }
-        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; }
         h1 { color: #25D366; }
-        .price { font-size: 36px; color: #333; margin: 20px 0; }
-        .features { text-align: left; margin: 20px 0; }
-        .features li { margin: 10px 0; }
+        .price { font-size: 36px; margin: 20px 0; }
+        ul { text-align: left; }
         button { background: #25D366; color: white; border: none; padding: 15px 30px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; }
-        button:hover { background: #1DA851; }
-        .info { color: #666; margin-top: 20px; font-size: 12px; }
       </style>
-      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     </head>
     <body>
       <div class="container">
-        <h1>🎨 WhatsApp Background Remover</h1>
+        <h1>🎨 Background Remover</h1>
         <h2>Upgrade to Premium</h2>
-        
         <div class="price">₹999/month</div>
-        
-        <div class="features">
-          <strong>Get Premium:</strong>
-          <ul>
-            <li>✅ 100 images per month</li>
-            <li>✅ Priority processing</li>
-            <li>✅ HD quality output</li>
-            <li>✅ No watermarks</li>
-          </ul>
-        </div>
-        
-        <button onclick="payNow()">Pay Now with Razorpay</button>
-        
-        <div class="info">
-          <p>Phone: ${phoneNumber}</p>
-          <p>Secure payment powered by Razorpay</p>
-        </div>
+        <ul>
+          <li>✅ 100 images/month</li>
+          <li>✅ Priority processing</li>
+          <li>✅ HD quality</li>
+        </ul>
+        <button onclick="payNow()">Pay Now</button>
       </div>
-
       <script>
         function payNow() {
           fetch('/create-order', {
@@ -240,117 +241,39 @@ app.get('/pay/:phoneNumber', (req, res) => {
           })
           .then(r => r.json())
           .then(data => {
-            const options = {
+            new Razorpay({
               key: '${process.env.RAZORPAY_KEY_ID}',
+              order_id: data.orderId,
               amount: data.amount,
               currency: data.currency,
-              order_id: data.orderId,
               handler: function(response) {
-                verifyPayment(response, '${phoneNumber}');
-              },
-              prefill: {
-                contact: '${phoneNumber}'
-              },
-              theme: {
-                color: '#25D366'
+                fetch('/verify-payment', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    orderId: response.razorpay_order_id,
+                    paymentId: response.razorpay_payment_id,
+                    signature: response.razorpay_signature,
+                    phoneNumber: '${phoneNumber}'
+                  })
+                }).then(r => r.json()).then(d => {
+                  if (d.success) {
+                    alert('✅ Success! You are now Premium!');
+                    window.location.href = '/success';
+                  }
+                });
               }
-            };
-            const rzp = new Razorpay(options);
-            rzp.open();
-          });
-        }
-
-        function verifyPayment(response, phoneNumber) {
-          fetch('/verify-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: response.razorpay_order_id,
-              paymentId: response.razorpay_payment_id,
-              signature: response.razorpay_signature,
-              phoneNumber: phoneNumber
-            })
-          })
-          .then(r => r.json())
-          .then(data => {
-            if (data.success) {
-              alert('✅ Payment successful! You are now Premium!');
-              window.location.href = '/success';
-            } else {
-              alert('❌ Payment failed: ' + data.error);
-            }
+            }).open();
           });
         }
       </script>
     </body>
     </html>
-  `;
-  
-  res.send(html);
-});
-
-// Success page
-app.get('/success', (req, res) => {
-  res.send(`
-    <h1>✅ Payment Successful!</h1>
-    <p>You are now a Premium member!</p>
-    <p>Go back to WhatsApp and use your 100 images/month.</p>
   `);
 });
-  try {
-    const { phoneNumber } = req.body;
-    
-    if (!phoneNumber) {
-      return res.status(400).json({ error: 'Phone number required' });
-    }
-    
-    const options = {
-      amount: 99900,
-      currency: 'INR',
-      receipt: `premium_${phoneNumber}_${Date.now()}`,
-      notes: { phoneNumber, description: 'WhatsApp BG Remover Premium' }
-    };
-    
-    const order = await razorpay.orders.create(options);
-    console.log(`💳 Payment order created for ${phoneNumber}:`, order.id);
-    
-    res.json({ success: true, orderId: order.id, amount: order.amount, currency: order.currency });
-  } catch (error) {
-    console.error('❌ Order creation error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
 
-// Verify payment
-app.post('/verify-payment', async (req, res) => {
-  try {
-    const { orderId, paymentId, signature, phoneNumber } = req.body;
-    
-    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
-    hmac.update(orderId + '|' + paymentId);
-    const generated_signature = hmac.digest('hex');
-    
-    if (generated_signature !== signature) {
-      return res.status(400).json({ success: false, error: 'Invalid signature' });
-    }
-    
-    const user = await User.findOne({ phoneNumber });
-    if (user) {
-      user.tier = 'premium';
-      user.imagesProcessed = 0;
-      user.subscriptionId = paymentId;
-      user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
-      await user.save();
-      
-      console.log(`⭐ User ${phoneNumber} upgraded to Premium!`);
-      return res.json({ success: true, message: 'Payment verified, you are now Premium!' });
-    }
-    
-    res.status(400).json({ success: false, error: 'User not found' });
-  } catch (error) {
-    console.error('❌ Payment verification error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
+app.get('/success', (req, res) => {
+  res.send('<h1>✅ Payment Successful!</h1><p>You are now Premium! Go back to WhatsApp.</p>');
 });
 
 // Main webhook
@@ -358,7 +281,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const from = req.body.From?.replace('whatsapp:', '');
     const to = req.body.To?.replace('whatsapp:', '');
-    const incomingMsg = req.body.Body?.toLowerCase().trim();
+    const msg = req.body.Body?.toLowerCase().trim();
     const numMedia = parseInt(req.body.NumMedia) || 0;
     
     if (!from) return res.status(200).send('OK');
@@ -367,106 +290,65 @@ app.post('/webhook', async (req, res) => {
     const user = await getUserData(from);
     
     if (!user) {
-      await sendWhatsAppMessage(from, '❌ Error loading user data', botNumber);
+      await sendMessage(from, '❌ Error', botNumber);
       return res.status(200).send('OK');
     }
     
-    // Handle image
+    // Image handling
     if (numMedia > 0) {
-      console.log(`\n📸 Image from ${from}`);
-      
       if (!REMOVEBG_API_KEY) {
-        await sendWhatsAppMessage(from, '❌ Background removal not configured', botNumber);
+        await sendMessage(from, '❌ Not configured', botNumber);
         return res.status(200).send('OK');
       }
       
-      const FREE_LIMIT = 3;
-      const PREMIUM_LIMIT = 100;
-      const limit = user.tier === 'premium' ? PREMIUM_LIMIT : FREE_LIMIT;
-      
+      const limit = user.tier === 'premium' ? 100 : 3;
       if (user.imagesProcessed >= limit) {
-        await sendWhatsAppMessage(from,
-          `⚠️ *Limit Reached*\n\nYou've used all ${limit} images this month.\n\n⭐ Upgrade to Premium!\nReply: UPGRADE`,
-          botNumber
-        );
+        await sendMessage(from, `⚠️ Limit reached (${limit}). Reply UPGRADE`, botNumber);
         return res.status(200).send('OK');
       }
       
       try {
-        await sendWhatsAppMessage(from, '⏳ Processing...', botNumber);
-        
-        const processedImage = await removeBackground(req.body.MediaUrl0);
-        const uploadedUrl = await uploadToCloudinary(processedImage, from);
-        
+        await sendMessage(from, '⏳ Processing...', botNumber);
+        const image = await removeBackground(req.body.MediaUrl0);
+        const url = await uploadToCloudinary(image, from);
         user.imagesProcessed++;
         await user.save();
-        
         const remaining = limit - user.imagesProcessed;
-        
-        await sendWhatsAppImage(from,
-          uploadedUrl,
-          `✅ *Background Removed!*\n\nRemaining: ${remaining}/${limit}\n\n${remaining === 0 && user.tier === 'free' ? '⭐ Upgrade for more!' : ''}`,
-          botNumber
-        );
+        await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
-        await sendWhatsAppMessage(from, `❌ Error: ${error.message}`, botNumber);
+        await sendMessage(from, `❌ Error: ${error.message}`, botNumber);
       }
-      
       return res.status(200).send('OK');
     }
     
-    // Handle text commands
-    console.log(`\n💬 Message from ${from}: ${incomingMsg}`);
-    
-    if (incomingMsg === 'start' || incomingMsg === 'hello') {
-      await sendWhatsAppMessage(from,
-        `🎨 *Background Remover Bot*\n\nWelcome! Send any image and I'll remove the background.\n\n📊 Status:\nPlan: ${user.tier.toUpperCase()}\nUsed: ${user.imagesProcessed}/${user.tier === 'premium' ? 100 : 3}\n\n💡 Commands:\n• HELP - Show commands\n• STATUS - Check usage\n• Send image - Remove background!`,
+    // Commands
+    if (msg === 'start' || msg === 'hello') {
+      await sendMessage(from, 
+        `🎨 *Background Remover*\n\n📊 Status: ${user.tier.toUpperCase()}\nUsed: ${user.imagesProcessed}/${user.tier === 'premium' ? 100 : 3}\n\nCommands: START, STATUS, HELP, UPGRADE`,
         botNumber
       );
-    }
-    else if (incomingMsg === 'status') {
+    } else if (msg === 'status') {
       const limit = user.tier === 'premium' ? 100 : 3;
-      await sendWhatsAppMessage(from,
-        `📊 *Your Status*\n\nPlan: ${user.tier.toUpperCase()}\nImages: ${user.imagesProcessed}/${limit}\nRemaining: ${limit - user.imagesProcessed}\n\n${user.tier === 'free' ? '⭐ Send UPGRADE for Premium!' : '✨ Thanks for being Premium!'}`,
-        botNumber
-      );
-    }
-    else if (incomingMsg === 'help') {
-      await sendWhatsAppMessage(from,
-        `📖 *Commands*\n\n• START - Get started\n• STATUS - Check account\n• HELP - Show this\n• UPGRADE - Go Premium\n\nJust send an image to remove background!`,
-        botNumber
-      );
-    }
-    else if (incomingMsg === 'upgrade') {
-      await sendWhatsAppMessage(from,
-        `⭐ *Premium Plan - ₹999/month*\n\n✅ 100 images/month\n✅ Priority processing\n✅ HD quality\n\n💳 Reply CONFIRM to pay`,
-        botNumber
-      );
-    }
-    else if (incomingMsg === 'confirm') {
+      await sendMessage(from, `📊 Plan: ${user.tier.toUpperCase()}\nUsed: ${user.imagesProcessed}/${limit}`, botNumber);
+    } else if (msg === 'help') {
+      await sendMessage(from, `📖 *Commands*\nSTART - Start\nSTATUS - Check usage\nUPGRADE - Go Premium\nSend image to remove background`, botNumber);
+    } else if (msg === 'upgrade') {
+      await sendMessage(from, `⭐ Premium: ₹999/month\n100 images/month\n\nReply CONFIRM to pay`, botNumber);
+    } else if (msg === 'confirm') {
       if (!process.env.RAZORPAY_KEY_ID) {
-        await sendWhatsAppMessage(from, '❌ Payments not configured', botNumber);
+        await sendMessage(from, '❌ Payments not configured', botNumber);
         return res.status(200).send('OK');
       }
-      
-      const railwayUrl = process.env.RAILWAY_DOMAIN 
-        ? `https://${process.env.RAILWAY_DOMAIN}`
-        : 'https://whatsapp-bg-remover-production.up.railway.app';
-      
-      await sendWhatsAppMessage(from,
-        `💳 *Payment Link*\n\n🔗 ${railwayUrl}/pay/${from.replace('+', '')}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
-        botNumber
-      );
-    }
-    else if (incomingMsg === 'verify') {
+      const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
+      await sendMessage(from, `💳 Pay here:\nhttps://${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
+    } else if (msg === 'verify') {
       if (user.tier === 'premium') {
-        await sendWhatsAppMessage(from, `✅ You're Premium!\n\n100 images/month available 🎉`, botNumber);
+        await sendMessage(from, `✅ You're Premium! 100 images/month`, botNumber);
       } else {
-        await sendWhatsAppMessage(from, `⏳ Verifying payment...`, botNumber);
+        await sendMessage(from, `⏳ Verifying...`, botNumber);
       }
-    }
-    else {
-      await sendWhatsAppMessage(from, '👋 Send me an image to remove its background!\n\nType HELP for more.', botNumber);
+    } else {
+      await sendMessage(from, `👋 Send an image to remove background\n\nType HELP for commands`, botNumber);
     }
     
     res.status(200).send('OK');
@@ -476,11 +358,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Health check
 app.get('/', (req, res) => res.send('✅ Bot running!'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`✅ Ready for messages!\n`);
+  console.log(`\n🚀 Server on port ${PORT}\n`);
 });
