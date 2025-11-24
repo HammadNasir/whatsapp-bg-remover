@@ -184,8 +184,119 @@ async function sendWhatsAppImage(to, imageUrl, caption, botNumber) {
   }
 }
 
-// Create Razorpay payment order
-app.post('/create-order', async (req, res) => {
+// Payment page
+app.get('/pay/:phoneNumber', async (req, res) => {
+  const { phoneNumber } = req.params;
+  
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>WhatsApp BG Remover - Premium</title>
+      <style>
+        body { font-family: Arial; text-align: center; padding: 40px; background: #f5f5f5; }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #25D366; }
+        .price { font-size: 36px; color: #333; margin: 20px 0; }
+        .features { text-align: left; margin: 20px 0; }
+        .features li { margin: 10px 0; }
+        button { background: #25D366; color: white; border: none; padding: 15px 30px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 100%; }
+        button:hover { background: #1DA851; }
+        .info { color: #666; margin-top: 20px; font-size: 12px; }
+      </style>
+      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    </head>
+    <body>
+      <div class="container">
+        <h1>🎨 WhatsApp Background Remover</h1>
+        <h2>Upgrade to Premium</h2>
+        
+        <div class="price">₹999/month</div>
+        
+        <div class="features">
+          <strong>Get Premium:</strong>
+          <ul>
+            <li>✅ 100 images per month</li>
+            <li>✅ Priority processing</li>
+            <li>✅ HD quality output</li>
+            <li>✅ No watermarks</li>
+          </ul>
+        </div>
+        
+        <button onclick="payNow()">Pay Now with Razorpay</button>
+        
+        <div class="info">
+          <p>Phone: ${phoneNumber}</p>
+          <p>Secure payment powered by Razorpay</p>
+        </div>
+      </div>
+
+      <script>
+        function payNow() {
+          fetch('/create-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phoneNumber: '${phoneNumber}' })
+          })
+          .then(r => r.json())
+          .then(data => {
+            const options = {
+              key: '${process.env.RAZORPAY_KEY_ID}',
+              amount: data.amount,
+              currency: data.currency,
+              order_id: data.orderId,
+              handler: function(response) {
+                verifyPayment(response, '${phoneNumber}');
+              },
+              prefill: {
+                contact: '${phoneNumber}'
+              },
+              theme: {
+                color: '#25D366'
+              }
+            };
+            const rzp = new Razorpay(options);
+            rzp.open();
+          });
+        }
+
+        function verifyPayment(response, phoneNumber) {
+          fetch('/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orderId: response.razorpay_order_id,
+              paymentId: response.razorpay_payment_id,
+              signature: response.razorpay_signature,
+              phoneNumber: phoneNumber
+            })
+          })
+          .then(r => r.json())
+          .then(data => {
+            if (data.success) {
+              alert('✅ Payment successful! You are now Premium!');
+              window.location.href = '/success';
+            } else {
+              alert('❌ Payment failed: ' + data.error);
+            }
+          });
+        }
+      </script>
+    </body>
+    </html>
+  `;
+  
+  res.send(html);
+});
+
+// Success page
+app.get('/success', (req, res) => {
+  res.send(`
+    <h1>✅ Payment Successful!</h1>
+    <p>You are now a Premium member!</p>
+    <p>Go back to WhatsApp and use your 100 images/month.</p>
+  `);
+});
   try {
     const { phoneNumber } = req.body;
     
@@ -338,25 +449,14 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send('OK');
       }
       
-      try {
-        // Create order directly instead of HTTP request
-        const options = {
-          amount: 99900,
-          currency: 'INR',
-          receipt: `premium_${from}_${Date.now()}`,
-          notes: { phoneNumber: from, description: 'WhatsApp BG Remover Premium' }
-        };
-        
-        const order = await razorpay.orders.create(options);
-        console.log(`💳 Payment order created for ${from}:`, order.id);
-        
-        await sendWhatsAppMessage(from,
-          `💳 *Payment Link*\n\n🔗 https://rzp.io/i/${order.id}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
-          botNumber
-        );
-      } catch (error) {
-        await sendWhatsAppMessage(from, `❌ Error: ${error.message}`, botNumber);
-      }
+      const railwayUrl = process.env.RAILWAY_DOMAIN 
+        ? `https://${process.env.RAILWAY_DOMAIN}`
+        : 'https://whatsapp-bg-remover-production.up.railway.app';
+      
+      await sendWhatsAppMessage(from,
+        `💳 *Payment Link*\n\n🔗 ${railwayUrl}/pay/${from.replace('+', '')}\n\nPay ₹999 to upgrade!\n\nAfter payment, reply VERIFY`,
+        botNumber
+      );
     }
     else if (incomingMsg === 'verify') {
       if (user.tier === 'premium') {
