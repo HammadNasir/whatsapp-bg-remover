@@ -239,6 +239,7 @@ app.get('/pay/:phoneNumber', (req, res) => {
           <li>✅ HD quality</li>
         </ul>
         <button onclick="payNow()">Pay Now</button>
+        <p id="status"></p>
       </div>
       <script>
         function payNow() {
@@ -249,12 +250,13 @@ app.get('/pay/:phoneNumber', (req, res) => {
           })
           .then(r => r.json())
           .then(data => {
-            new Razorpay({
+            const options = {
               key: '${process.env.RAZORPAY_KEY_ID}',
               order_id: data.orderId,
               amount: data.amount,
               currency: data.currency,
               handler: function(response) {
+                document.getElementById('status').innerHTML = '⏳ Verifying payment...';
                 fetch('/verify-payment', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -264,14 +266,28 @@ app.get('/pay/:phoneNumber', (req, res) => {
                     signature: response.razorpay_signature,
                     phoneNumber: '${phoneNumber}'
                   })
-                }).then(r => r.json()).then(d => {
-                  if (d.success) {
-                    alert('✅ Success! You are now Premium!');
-                    window.location.href = '/success';
+                })
+                .then(r => r.json())
+                .then(data => {
+                  if (data.success) {
+                    setTimeout(() => {
+                      window.location.href = '/success';
+                    }, 1000);
+                  } else {
+                    document.getElementById('status').innerHTML = '❌ Verification failed: ' + data.error;
                   }
+                })
+                .catch(e => {
+                  document.getElementById('status').innerHTML = '❌ Error: ' + e.message;
                 });
-              }
-            }).open();
+              },
+              prefill: { contact: '${phoneNumber}' },
+              theme: { color: '#25D366' }
+            };
+            new Razorpay(options).open();
+          })
+          .catch(e => {
+            document.getElementById('status').innerHTML = '❌ Error: ' + e.message;
           });
         }
       </script>
