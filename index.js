@@ -185,7 +185,7 @@ async function sendWhatsAppImage(to, imageUrl, caption, botNumber) {
 }
 
 // Payment page
-app.get('/pay/:phoneNumber', async (req, res) => {
+app.get('/pay/:phoneNumber', (req, res) => {
   const { phoneNumber } = req.params;
   
   const html = `
