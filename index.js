@@ -179,31 +179,55 @@ app.post('/create-order', async (req, res) => {
 
 app.post('/verify-payment', async (req, res) => {
   try {
-    const { orderId, paymentId, signature, phoneNumber } = req.body;
+    let { orderId, paymentId, signature, phoneNumber } = req.body;
+    
+    // Normalize phone number - add + if missing
+    if (!phoneNumber.startsWith('+')) {
+      phoneNumber = '+' + phoneNumber;
+    }
+    
+    console.log(`💳 Verifying payment for: ${phoneNumber}`);
+    
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
     hmac.update(orderId + '|' + paymentId);
     const generated = hmac.digest('hex');
     
-    if (generated !== signature) return res.status(400).json({ success: false, error: 'Invalid' });
+    if (generated !== signature) return res.status(400).json({ success: false, error: 'Invalid signature' });
     
-    const user = await User.findOne({ phoneNumber });
+    // Try to find user with different formats
+    let user = await User.findOne({ phoneNumber });
+    
+    if (!user) {
+      // Try without +
+      const phoneWithout = phoneNumber.replace('+', '');
+      user = await User.findOne({ phoneNumber: phoneWithout });
+    }
+    
+    if (!user) {
+      // Try with +
+      const phoneWith = '+' + phoneNumber.replace('+', '');
+      user = await User.findOne({ phoneNumber: phoneWith });
+    }
+    
     if (user) {
       user.tier = 'premium';
       user.imagesProcessed = 0;
       user.subscriptionId = paymentId;
       user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
       await user.save();
-      console.log(`⭐ ${phoneNumber} upgraded to Premium!`);
+      console.log(`⭐ ${user.phoneNumber} upgraded to Premium!`);
       
       // Send WhatsApp notification
       const botNumber = TWILIO_WHATSAPP_NUMBER || '+14155238886';
-      await sendMessage(phoneNumber.replace(/^91/, '+91'), 
+      await sendMessage(user.phoneNumber, 
         `✅ *Payment Successful!*\n\nYou are now Premium! 🎉\n\n100 images/month available\n\nStart removing backgrounds!`, 
         botNumber
       );
       
-      return res.json({ success: true, message: 'Payment verified!' });
+      return res.json({ success: true, message: 'Payment verified and user upgraded!' });
     }
+    
+    console.log('❌ User not found with number:', phoneNumber);
     res.status(400).json({ success: false, error: 'User not found' });
   } catch (error) {
     console.error('❌ Verify error:', error.message);
