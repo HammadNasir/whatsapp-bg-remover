@@ -340,7 +340,7 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send('OK');
       }
       const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
-      await sendMessage(from, `💳 Pay here:\nhttps://${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
+      await sendMessage(from, `💳 Pay here:\n${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
     } else if (msg === 'verify') {
       if (user.tier === 'premium') {
         await sendMessage(from, `✅ You're Premium! 100 images/month`, botNumber);
