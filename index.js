@@ -128,7 +128,13 @@ async function removeBackground(imageUrl) {
     console.error('❌ removeBackground error:', error.message);
     if (error.response) {
       console.error('   Status:', error.response.status);
-      console.error('   Data:', error.response.data?.toString().substring(0, 200));
+      const errorData = error.response.data?.toString();
+      console.error('   Error:', errorData?.substring(0, 300));
+      
+      // Parse remove.bg error
+      if (errorData && errorData.includes('unknown_foreground')) {
+        throw new Error('Could not find clear subject in image. Please send a clearer photo with a distinct person or object.');
+      }
     }
     throw error;
   }
