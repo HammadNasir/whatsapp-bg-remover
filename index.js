@@ -181,54 +181,55 @@ app.post('/verify-payment', async (req, res) => {
   try {
     let { orderId, paymentId, signature, phoneNumber } = req.body;
     
+    console.log('💳 Verify request received');
+    console.log('   Phone from request:', phoneNumber);
+    
     // Normalize phone number - add + if missing
     if (!phoneNumber.startsWith('+')) {
       phoneNumber = '+' + phoneNumber;
     }
     
-    console.log(`💳 Verifying payment for: ${phoneNumber}`);
+    console.log('   Normalized phone:', phoneNumber);
     
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
     hmac.update(orderId + '|' + paymentId);
     const generated = hmac.digest('hex');
     
-    if (generated !== signature) return res.status(400).json({ success: false, error: 'Invalid signature' });
+    console.log('   Signature match:', generated === signature);
     
-    // Try to find user with different formats
+    if (generated !== signature) {
+      console.log('❌ Signature mismatch');
+      return res.status(400).json({ success: false, error: 'Invalid signature' });
+    }
+    
+    // Find user
+    console.log('   Searching for user:', phoneNumber);
     let user = await User.findOne({ phoneNumber });
     
     if (!user) {
-      // Try without +
-      const phoneWithout = phoneNumber.replace('+', '');
-      user = await User.findOne({ phoneNumber: phoneWithout });
+      console.log('   User not found with format:', phoneNumber);
+      console.log('   Available users in DB:');
+      const allUsers = await User.find();
+      allUsers.forEach(u => console.log('     -', u.phoneNumber));
+      return res.status(400).json({ success: false, error: 'User not found: ' + phoneNumber });
     }
     
-    if (!user) {
-      // Try with +
-      const phoneWith = '+' + phoneNumber.replace('+', '');
-      user = await User.findOne({ phoneNumber: phoneWith });
-    }
+    // Upgrade user
+    user.tier = 'premium';
+    user.imagesProcessed = 0;
+    user.subscriptionId = paymentId;
+    user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+    await user.save();
+    console.log(`⭐ ${user.phoneNumber} upgraded to Premium!`);
     
-    if (user) {
-      user.tier = 'premium';
-      user.imagesProcessed = 0;
-      user.subscriptionId = paymentId;
-      user.resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
-      await user.save();
-      console.log(`⭐ ${user.phoneNumber} upgraded to Premium!`);
-      
-      // Send WhatsApp notification
-      const botNumber = TWILIO_WHATSAPP_NUMBER || '+14155238886';
-      await sendMessage(user.phoneNumber, 
-        `✅ *Payment Successful!*\n\nYou are now Premium! 🎉\n\n100 images/month available\n\nStart removing backgrounds!`, 
-        botNumber
-      );
-      
-      return res.json({ success: true, message: 'Payment verified and user upgraded!' });
-    }
+    // Send WhatsApp notification
+    const botNumber = TWILIO_WHATSAPP_NUMBER || '+14155238886';
+    await sendMessage(user.phoneNumber, 
+      `✅ *Payment Successful!*\n\nYou are now Premium! 🎉\n\n100 images/month available\n\nStart removing backgrounds!`, 
+      botNumber
+    );
     
-    console.log('❌ User not found with number:', phoneNumber);
-    res.status(400).json({ success: false, error: 'User not found' });
+    return res.json({ success: true, message: 'Payment verified!' });
   } catch (error) {
     console.error('❌ Verify error:', error.message);
     res.status(500).json({ error: error.message });
@@ -357,14 +358,25 @@ app.post('/webhook', async (req, res) => {
       
       try {
         await sendMessage(from, '⏳ Processing...', botNumber);
-        const image = await removeBackground(req.body.MediaUrl0);
+        console.log('🔄 Starting image processing...');
+        
+        const imageUrl = req.body.MediaUrl0;
+        console.log('📸 Image URL:', imageUrl);
+        
+        const image = await removeBackground(imageUrl);
+        console.log('✅ Background removed');
+        
         const url = await uploadToCloudinary(image, from);
+        console.log('☁️  Uploaded to Cloudinary');
+        
         user.imagesProcessed++;
         await user.save();
+        
         const remaining = limit - user.imagesProcessed;
         await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
-        await sendMessage(from, `❌ Error: ${error.message}`, botNumber);
+        console.error('❌ Image processing failed:', error);
+        await sendMessage(from, `❌ Error processing image:\n\n${error.message}`, botNumber);
       }
       return res.status(200).send('OK');
     }
@@ -388,7 +400,7 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send('OK');
       }
       const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
-      await sendMessage(from, `💳 Pay here:\n${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
+      await sendMessage(from, `💳 Pay here:\nhttps://${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
     } else if (msg === 'verify') {
       // Refresh user data from database
       const updatedUser = await getUserData(from);
