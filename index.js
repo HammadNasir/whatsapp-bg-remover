@@ -112,11 +112,11 @@ async function removeBackground(imageUrl) {
     console.log('📤 Sending to remove.bg API (requesting PNG with alpha)...');
     const formData = new FormData();
     // Send the original as a PNG file name and content type so remove.bg treats it properly.
-    formData.append('image_file', Buffer.from(imageResponse.data), { filename: 'image.png', contentType: 'image/png' });
+    formData.append('image_file', Buffer.from(imageResponse.data), { filename: 'image' });
     formData.append('size', 'auto');
-    formData.append('type', 'auto');
+    // formData.append('type', 'auto');
     formData.append('format', 'png');   // request PNG output
-    formData.append('channels', 'rgba'); // request alpha channel
+    // formData.append('channels', 'rgba'); // request alpha channel
 
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
       headers: { 
