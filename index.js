@@ -112,6 +112,8 @@ async function removeBackground(imageUrl) {
     const formData = new FormData();
     formData.append('image_file', Buffer.from(imageResponse.data), 'image.jpg');
     formData.append('size', 'auto');
+    formData.append('type', 'auto');
+    formData.append('format', 'PNG');
     
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
       headers: { 
@@ -122,7 +124,7 @@ async function removeBackground(imageUrl) {
       timeout: 60000
     });
     
-    console.log('✅ Background removed successfully');
+    console.log('✅ Background removed successfully (PNG format)');
     return Buffer.from(response.data, 'binary');
   } catch (error) {
     console.error('❌ removeBackground error:', error.message);
@@ -131,7 +133,6 @@ async function removeBackground(imageUrl) {
       const errorData = error.response.data?.toString();
       console.error('   Error:', errorData?.substring(0, 300));
       
-      // Parse remove.bg error
       if (errorData && errorData.includes('unknown_foreground')) {
         throw new Error('Could not find clear subject in image. Please send a clearer photo with a distinct person or object.');
       }
@@ -148,9 +149,12 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
     const result = await cloudinary.uploader.upload(tempPath, {
       folder: 'whatsapp-bg-remover',
       public_id: `bg_${phoneNumber}_${Date.now()}`,
-      format: 'png'
+      format: 'png',
+      quality: 'auto',
+      flags: 'preserve_transparency'
     });
     fs.unlinkSync(tempPath);
+    console.log('☁️  Uploaded PNG to Cloudinary');
     return result.secure_url;
   } catch (error) {
     console.error('❌ uploadToCloudinary error:', error.message);
