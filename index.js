@@ -93,20 +93,43 @@ async function getUserData(phoneNumber) {
 async function removeBackground(imageUrl) {
   try {
     if (!REMOVEBG_API_KEY) throw new Error('remove.bg key not set');
+    
+    console.log('🔄 Fetching image from Twilio...');
     const imageResponse = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
-      auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN }
+      auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN },
+      timeout: 30000
     });
+    
+    const imageSize = imageResponse.data.length;
+    console.log(`📸 Image size: ${(imageSize / 1024 / 1024).toFixed(2)}MB`);
+    
+    if (imageSize > 25 * 1024 * 1024) {
+      throw new Error('Image too large (max 25MB)');
+    }
+    
+    console.log('📤 Sending to remove.bg API...');
     const formData = new FormData();
-    formData.append('image_file', Buffer.from(imageResponse.data), 'image.png');
+    formData.append('image_file', Buffer.from(imageResponse.data), 'image.jpg');
     formData.append('size', 'auto');
+    
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
-      headers: { ...formData.getHeaders(), 'X-Api-Key': REMOVEBG_API_KEY },
-      responseType: 'arraybuffer'
+      headers: { 
+        ...formData.getHeaders(), 
+        'X-Api-Key': REMOVEBG_API_KEY 
+      },
+      responseType: 'arraybuffer',
+      timeout: 60000
     });
+    
+    console.log('✅ Background removed successfully');
     return Buffer.from(response.data, 'binary');
   } catch (error) {
     console.error('❌ removeBackground error:', error.message);
+    if (error.response) {
+      console.error('   Status:', error.response.status);
+      console.error('   Data:', error.response.data?.toString().substring(0, 200));
+    }
     throw error;
   }
 }
