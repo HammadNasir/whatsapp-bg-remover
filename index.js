@@ -233,6 +233,21 @@ async function sendImage(to, imageUrl, caption, botNumber) {
   }
 }
 
+async function sendDocument(to, fileUrl, caption, botNumber) {
+  try {
+    await client.messages.create({
+      from: `whatsapp:${botNumber}`,
+      to: `whatsapp:${to}`,
+      body: caption,
+      mediaUrl: [fileUrl],
+      mediaContentType: ['application/octet-stream']  // 👈 forces document mode
+    });
+    console.log(`📄 Document sent to ${to}`);
+  } catch (error) {
+    console.error('❌ Send document error:', error.message);
+  }
+}
+
 // Payment endpoints
 app.post('/create-order', async (req, res) => {
   try {
@@ -470,7 +485,8 @@ app.post('/webhook', async (req, res) => {
         await user.save();
         
         const remaining = limit - user.imagesProcessed;
-        await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
+        await sendDocument(from, url, `✅ Done! ${remaining} left`, botNumber);
+        // await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
         console.error('❌ Image processing failed:', error);
         await sendMessage(from, `❌ Error processing image:\n\n${error.message}`, botNumber);
