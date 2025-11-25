@@ -113,7 +113,7 @@ async function removeBackground(imageUrl) {
     formData.append('image_file', Buffer.from(imageResponse.data), 'image.jpg');
     formData.append('size', 'auto');
     formData.append('type', 'auto');
-    formData.append('format', 'PNG');
+    formData.append('format', 'png');
     
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
       headers: { 
@@ -433,7 +433,7 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send('OK');
       }
       const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
-      await sendMessage(from, `💳 Pay here:\nhttps://${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
+      await sendMessage(from, `💳 Pay here:\n${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
     } else if (msg === 'verify') {
       // Refresh user data from database
       const updatedUser = await getUserData(from);
