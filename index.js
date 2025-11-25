@@ -149,7 +149,6 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
   try {
     if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not set');
 
-    // sanitize phoneNumber for public_id
     const safePhone = (phoneNumber || '').replace(/\D/g, '') || 'unknown';
 
     return await new Promise((resolve, reject) => {
@@ -157,18 +156,32 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
         {
           folder: 'whatsapp-bg-remover',
           public_id: `bg_${safePhone}_${Date.now()}`,
-          format: 'png',               // force PNG output
-          quality: 'auto',
-          flags: 'preserve_transparency',
-          resource_type: 'image'
+          
+          // 🔥 MUST HAVE
+          format: 'png',
+          resource_type: 'image',
+
+          // ❌ REMOVE THIS (Cloudinary sometimes flattens PNG transparency)
+          // quality: "auto",
+
+          // 🔥 KEEP THIS
+          flags: ['preserve_transparency'],
+
+          // 🔥 Prevent automatic JPEG fallback
+          fetch_format: 'png'
         },
         (error, result) => {
           if (error) {
             console.error('❌ Cloudinary upload error:', error);
             return reject(error);
           }
-          console.log('☁️  Uploaded PNG to Cloudinary:', result.secure_url);
-          resolve(result.secure_url);
+
+          // 🔥 FORCE .png extension even if Cloudinary returns .jpg branded URL
+          let url = result.secure_url;
+          url = url.replace(/\.jpg$/i, ".png"); 
+
+          console.log('☁️  Uploaded transparent PNG:', url);
+          resolve(url);
         }
       );
 
