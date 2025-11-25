@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const streamifier = require('streamifier');
+const os = require('os');
 
 const app = express();
 app.use(express.json());
@@ -93,60 +94,76 @@ async function getUserData(phoneNumber) {
 
 async function removeBackground(imageUrl) {
   try {
-    if (!REMOVEBG_API_KEY) throw new Error('remove.bg key not set');
-    
-    console.log('🔄 Fetching image from Twilio...');
+    if (!REMOVEBG_API_KEY) throw new Error('remove.bg key not set (REMOVEBG_API_KEY)');
+
+    console.log('🔄 Fetching image from Twilio (removeBackground)...');
     const imageResponse = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
       auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN },
       timeout: 30000
     });
-    
-    const imageSize = imageResponse.data.length;
-    console.log(`📸 Image size: ${(imageSize / 1024 / 1024).toFixed(2)}MB`);
-    
-    if (imageSize > 25 * 1024 * 1024) {
+
+    const originalBuffer = Buffer.from(imageResponse.data);
+    console.log(`📸 Downloaded original: ${originalBuffer.length} bytes`);
+
+    if (originalBuffer.length > 25 * 1024 * 1024) {
       throw new Error('Image too large (max 25MB)');
     }
-    
-    console.log('📤 Sending to remove.bg API (requesting PNG with alpha)...');
-    const formData = new FormData();
-    // Send the original as a PNG file name and content type so remove.bg treats it properly.
-    formData.append('image_file', Buffer.from(imageResponse.data), { filename: 'image' });
-    formData.append('size', 'auto');
-    // formData.append('type', 'auto');
-    formData.append('format', 'png');   // request PNG output
-    // formData.append('channels', 'rgba'); // request alpha channel
 
-    const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
-      headers: { 
-        ...formData.getHeaders(), 
-        'X-Api-Key': REMOVEBG_API_KEY 
+    // Build form data for remove.bg - DO NOT set fake content-type or filename that contradicts actual bytes.
+    const formData = new FormData();
+    formData.append('image_file', originalBuffer); // let remove.bg detect type
+    formData.append('size', 'auto');
+    formData.append('format', 'png'); // request PNG output (transparent)
+
+    console.log('📤 Sending to remove.bg (requesting PNG output)...');
+    const resp = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
+      headers: {
+        ...formData.getHeaders(),
+        'X-Api-Key': REMOVEBG_API_KEY
       },
       responseType: 'arraybuffer',
       timeout: 60000
     });
-    
-    console.log('✅ Background removed successfully (PNG with transparency)');
-    return Buffer.from(response.data, 'binary');
+
+    const outBuffer = Buffer.from(resp.data);
+    console.log(`✅ remove.bg returned: ${outBuffer.length} bytes`);
+    console.log('   Response headers content-type:', resp.headers['content-type']);
+
+    // quick magic-bytes check for PNG:
+    const signature = outBuffer.slice(0, 8).toString('hex');
+    console.log('   Output signature (hex):', signature);
+    const pngSignature = '89504e470d0a1a0a';
+    if (resp.headers['content-type'] && resp.headers['content-type'].includes('png') && signature === pngSignature) {
+      console.log('   ✅ remove.bg output is PNG (has PNG magic header).');
+    } else {
+      // save temp for inspection and throw explicit error
+      const tmpFile = path.join(os.tmpdir(), `removebg_out_${Date.now()}`);
+      // pick extension based on content-type if present
+      const ext = resp.headers['content-type'] && resp.headers['content-type'].includes('png') ? '.png' : (resp.headers['content-type'] && resp.headers['content-type'].includes('jpeg') ? '.jpg' : '.bin');
+      const tmpPath = tmpFile + ext;
+      try { fs.writeFileSync(tmpPath, outBuffer); console.log('   ❗ Saved remove.bg output for inspection at', tmpPath); } catch (e) { console.warn('   ❗ Failed to save tmp file:', e.message); }
+      throw new Error(`remove.bg did not return a PNG. content-type=${resp.headers['content-type'] || 'unknown'}, signature=${signature}. Saved tmp: ${tmpPath}`);
+    }
+
+    return outBuffer;
   } catch (error) {
+    // Try to give more detail if possible
     console.error('❌ removeBackground error:', error.message);
     if (error.response) {
-      console.error('   Status:', error.response.status);
-      const errorData = error.response.data?.toString();
-      console.error('   Error:', errorData?.substring(0, 300));
-      
-      if (errorData && errorData.includes('unknown_foreground')) {
-        throw new Error('Could not find clear subject in image. Please send a clearer photo with a distinct person or object.');
-      }
+      try {
+        const txt = error.response.data?.toString?.();
+        if (txt) console.error('   remove.bg error body (truncated):', txt.substring(0, 800));
+      } catch (_) {}
     }
     throw error;
   }
 }
 
-// Upload directly from buffer to Cloudinary (no temp file), force PNG
 async function uploadToCloudinary(imageBuffer, phoneNumber) {
   try {
+    if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not set');
+
     const safePhone = (phoneNumber || '').replace(/\D/g, '') || 'unknown';
 
     return await new Promise((resolve, reject) => {
@@ -156,32 +173,38 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
           public_id: `bg_${safePhone}_${Date.now()}`,
           resource_type: 'image',
           format: 'png',
-
-          // 🔥 Must transform to keep PNG + compress for WhatsApp
           transformation: [
             {
-              fetch_format: "png",
-              quality: "auto:low",
-              flags: "preserve_transparency"
+              fetch_format: 'png',
+              // keep quality conservative but avoid automatic flattening
+              // removing quality: 'auto' to avoid unexpected flattening
+              flags: 'preserve_transparency'
             }
           ]
         },
         (error, result) => {
-          if (error) return reject(error);
-
-          console.log("Cloudinary FULL RESULT:", result);
-
+          if (error) {
+            console.error('❌ Cloudinary upload error:', error);
+            return reject(error);
+          }
+          console.log('☁️  Cloudinary FULL RESULT:', result);
+          // confirm Cloudinary reports png
+          if (result.format !== 'png') {
+            console.warn('   ⚠️ Cloudinary returned non-png format:', result.format);
+          }
           resolve(result.secure_url);
         }
       );
 
+      // log first few bytes for inspection
+      console.log('   Uploading to Cloudinary, buffer head (hex):', imageBuffer.slice(0, 8).toString('hex'));
       streamifier.createReadStream(imageBuffer).pipe(uploadStream);
     });
   } catch (error) {
+    console.error('❌ uploadToCloudinary error:', error.message);
     throw error;
   }
 }
-
 
 async function sendMessage(to, body, botNumber) {
   try {
@@ -377,6 +400,26 @@ app.get('/pay/:phoneNumber', (req, res) => {
 
 app.get('/success', (req, res) => {
   res.send('<h1>✅ Payment Successful!</h1><p>You are now Premium! Go back to WhatsApp.</p>');
+});
+
+// --- Diagnostic route to test a MediaUrl manually ---
+// Use: GET /debug?url=https://api.twilio.com/2010-04-01/Accounts/XXX/Media/YYY
+app.get('/debug', async (req, res) => {
+  try {
+    const testUrl = req.query.url;
+    if (!testUrl) return res.status(400).send('Provide ?url=');
+    const buf = await axios.get(testUrl, { responseType: 'arraybuffer', auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN } });
+    const b = Buffer.from(buf.data);
+    const head = b.slice(0, 8).toString('hex');
+    res.json({
+      bytes: b.length,
+      head_hex: head,
+      likely_png: head === '89504e470d0a1a0a',
+      sample_headers: buf.headers
+    });
+  } catch (err) {
+    res.status(500).send('debug error: ' + (err.message || err));
+  }
 });
 
 // Main webhook
