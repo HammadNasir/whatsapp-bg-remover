@@ -9,6 +9,7 @@ const path = require('path');
 const mongoose = require('mongoose');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const streamifier = require('streamifier');
 
 const app = express();
 app.use(express.json());
@@ -108,14 +109,15 @@ async function removeBackground(imageUrl) {
       throw new Error('Image too large (max 25MB)');
     }
     
-    console.log('📤 Sending to remove.bg API...');
+    console.log('📤 Sending to remove.bg API (requesting PNG with alpha)...');
     const formData = new FormData();
-    formData.append('image_file', Buffer.from(imageResponse.data), 'image.jpg');
+    // Send the original as a PNG file name and content type so remove.bg treats it properly.
+    formData.append('image_file', Buffer.from(imageResponse.data), { filename: 'image.png', contentType: 'image/png' });
     formData.append('size', 'auto');
     formData.append('type', 'auto');
-    formData.append('format', 'png');
-    formData.append('channels', 'rgba');
-    
+    formData.append('format', 'png');   // request PNG output
+    formData.append('channels', 'rgba'); // request alpha channel
+
     const response = await axios.post('https://api.remove.bg/v1.0/removebg', formData, {
       headers: { 
         ...formData.getHeaders(), 
@@ -142,21 +144,36 @@ async function removeBackground(imageUrl) {
   }
 }
 
+// Upload directly from buffer to Cloudinary (no temp file), force PNG
 async function uploadToCloudinary(imageBuffer, phoneNumber) {
   try {
     if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not set');
-    const tempPath = path.join(__dirname, `temp_${Date.now()}.png`);
-    fs.writeFileSync(tempPath, imageBuffer);
-    const result = await cloudinary.uploader.upload(tempPath, {
-      folder: 'whatsapp-bg-remover',
-      public_id: `bg_${phoneNumber}_${Date.now()}`,
-      format: 'png',
-      quality: 'auto',
-      flags: 'preserve_transparency'
+
+    // sanitize phoneNumber for public_id
+    const safePhone = (phoneNumber || '').replace(/\D/g, '') || 'unknown';
+
+    return await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'whatsapp-bg-remover',
+          public_id: `bg_${safePhone}_${Date.now()}`,
+          format: 'png',               // force PNG output
+          quality: 'auto',
+          flags: 'preserve_transparency',
+          resource_type: 'image'
+        },
+        (error, result) => {
+          if (error) {
+            console.error('❌ Cloudinary upload error:', error);
+            return reject(error);
+          }
+          console.log('☁️  Uploaded PNG to Cloudinary:', result.secure_url);
+          resolve(result.secure_url);
+        }
+      );
+
+      streamifier.createReadStream(imageBuffer).pipe(uploadStream);
     });
-    fs.unlinkSync(tempPath);
-    console.log('☁️  Uploaded PNG to Cloudinary');
-    return result.secure_url;
   } catch (error) {
     console.error('❌ uploadToCloudinary error:', error.message);
     throw error;
@@ -398,7 +415,7 @@ app.post('/webhook', async (req, res) => {
         console.log('📸 Image URL:', imageUrl);
         
         const image = await removeBackground(imageUrl);
-        console.log('✅ Background removed');
+        console.log('✅ Background removed (buffer length:', image.length, ')');
         
         const url = await uploadToCloudinary(image, from);
         console.log('☁️  Uploaded to Cloudinary');
@@ -434,7 +451,7 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send('OK');
       }
       const domain = process.env.RAILWAY_DOMAIN || 'whatsapp-bg-remover-production.up.railway.app';
-      await sendMessage(from, `💳 Pay here:\nhttps://${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
+      await sendMessage(from, `💳 Pay here:\n${domain}/pay/${from.replace('+', '')}\n\nAfter payment, reply VERIFY`, botNumber);
     } else if (msg === 'verify') {
       // Refresh user data from database
       const updatedUser = await getUserData(from);
