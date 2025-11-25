@@ -147,8 +147,6 @@ async function removeBackground(imageUrl) {
 // Upload directly from buffer to Cloudinary (no temp file), force PNG
 async function uploadToCloudinary(imageBuffer, phoneNumber) {
   try {
-    if (!process.env.CLOUDINARY_CLOUD_NAME) throw new Error('Cloudinary not set');
-
     const safePhone = (phoneNumber || '').replace(/\D/g, '') || 'unknown';
 
     return await new Promise((resolve, reject) => {
@@ -156,42 +154,34 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
         {
           folder: 'whatsapp-bg-remover',
           public_id: `bg_${safePhone}_${Date.now()}`,
-          
-          // 🔥 MUST HAVE
-          format: 'png',
           resource_type: 'image',
+          format: 'png',
 
-          // ❌ REMOVE THIS (Cloudinary sometimes flattens PNG transparency)
-          // quality: "auto",
-
-          // 🔥 KEEP THIS
-          flags: ['preserve_transparency'],
-
-          // 🔥 Prevent automatic JPEG fallback
-          fetch_format: 'png'
+          // 🔥 Must transform to keep PNG + compress for WhatsApp
+          transformation: [
+            {
+              fetch_format: "png",
+              quality: "auto:low",
+              flags: "preserve_transparency"
+            }
+          ]
         },
         (error, result) => {
-          if (error) {
-            console.error('❌ Cloudinary upload error:', error);
-            return reject(error);
-          }
+          if (error) return reject(error);
 
-          // 🔥 FORCE .png extension even if Cloudinary returns .jpg branded URL
-          let url = result.secure_url;
-          url = url.replace(/\.jpg$/i, ".png"); 
+          console.log("Cloudinary FULL RESULT:", result);
 
-          console.log('☁️  Uploaded transparent PNG:', url);
-          resolve(url);
+          resolve(result.secure_url);
         }
       );
 
       streamifier.createReadStream(imageBuffer).pipe(uploadStream);
     });
   } catch (error) {
-    console.error('❌ uploadToCloudinary error:', error.message);
     throw error;
   }
 }
+
 
 async function sendMessage(to, body, botNumber) {
   try {
