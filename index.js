@@ -212,6 +212,14 @@ function forceDocument(url) {
   return url.replace('/upload/', '/upload/fl_attachment/');
 }
 
+function encodeUrl(url) {
+  return Buffer.from(url).toString('base64url');
+}
+
+function decodeUrl(encoded) {
+  return Buffer.from(encoded, 'base64url').toString();
+}
+
 async function sendMessage(to, body, botNumber) {
   try {
     await client.messages.create({
@@ -507,8 +515,8 @@ app.post('/webhook', async (req, res) => {
   ? `https://${process.env.RAILWAY_DOMAIN}`
   : 'https://whatsapp-bg-remover-production.up.railway.app/';
 
-const proxyUrl =
-  `${domain}/file?url=${encodeURIComponent(url)}`;
+const encoded = encodeUrl(url);
+const proxyUrl = `${domain}/file/${encoded}`;
 
         await sendDocument(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
         await sendImage(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
@@ -558,33 +566,42 @@ const proxyUrl =
   }
 });
 
+app.head('/file/:encoded', (req, res) => {
+  res.set({
+    'Content-Type': 'image/png',
+    'Content-Disposition': 'attachment; filename="output.png"'
+  });
+  return res.sendStatus(200);
+});
+
+
 app.get('/', (req, res) => res.send('✅ Bot running!'));
 
 const PORT = process.env.PORT || 3000;
 
-app.get('/file', async (req, res) => {
+app.get('/file/:encoded', async (req, res) => {
   try {
-    const { url } = req.query;
-    if (!url) return res.status(400).send('Missing url');
+    const cloudinaryUrl = decodeUrl(req.params.encoded);
 
-    const response = await axios.get(url, {
+    const response = await axios.get(cloudinaryUrl, {
       responseType: 'arraybuffer',
       timeout: 8000
     });
 
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="output.png"'
-    );
-    res.setHeader('Content-Type', 'image/png'); // ✅ REQUIRED
-    res.setHeader('Content-Length', response.data.length);
+    res.status(200);
+    res.set({
+      'Content-Type': 'image/png',
+      'Content-Disposition': 'attachment; filename="output.png"',
+      'Content-Length': response.data.length
+    });
 
-    return res.status(200).send(Buffer.from(response.data));
+    return res.end(Buffer.from(response.data));
   } catch (err) {
     console.error('❌ File proxy error:', err.message);
-    return res.status(500).send('File error');
+    return res.sendStatus(500);
   }
 });
+
 
 
 app.listen(PORT, () => {
