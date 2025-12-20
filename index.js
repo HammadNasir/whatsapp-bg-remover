@@ -503,8 +503,12 @@ app.post('/webhook', async (req, res) => {
 
         // const documentUrl = forceDocument(url);
 
-        const domain = process.env.RAILWAY_DOMAIN || 'your-domain.com';
-const proxyUrl = `${domain}/file?url=${encodeURIComponent(url)}`;
+        const domain = process.env.RAILWAY_DOMAIN
+  ? `https://${process.env.RAILWAY_DOMAIN}`
+  : 'https://whatsapp-bg-remover-production.up.railway.app/';
+
+const proxyUrl =
+  `${domain}/file?url=${encodeURIComponent(url)}`;
 
         await sendDocument(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
         await sendImage(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
@@ -565,19 +569,23 @@ app.get('/file', async (req, res) => {
 
     const response = await axios.get(url, {
       responseType: 'arraybuffer',
-      timeout: 60000
+      timeout: 8000
     });
 
-    res.setHeader('Content-Disposition', 'attachment; filename="output.png"');
-    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="output.png"'
+    );
+    res.setHeader('Content-Type', 'image/png'); // ✅ REQUIRED
     res.setHeader('Content-Length', response.data.length);
 
-    return res.send(Buffer.from(response.data));
+    return res.status(200).send(Buffer.from(response.data));
   } catch (err) {
     console.error('❌ File proxy error:', err.message);
-    res.status(500).send('File error');
+    return res.status(500).send('File error');
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`\n🚀 Server on port ${PORT}\n`);
