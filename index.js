@@ -240,17 +240,12 @@ async function sendImage(to, imageUrl, caption, botNumber) {
 }
 
 async function sendDocument(to, fileUrl, caption, botNumber) {
-  try {
-    await client.messages.create({
-      from: `whatsapp:${botNumber}`,
-      to: `whatsapp:${to}`,
-      body: caption,
-      mediaUrl: [forceDocument(fileUrl)]
-    });
-    console.log('📄 TRUE document sent');
-  } catch (e) {
-    console.error(e.message);
-  }
+  await client.messages.create({
+    from: `whatsapp:${botNumber}`,
+    to: `whatsapp:${to}`,
+    body: caption,
+    mediaUrl: [fileUrl]
+  });
 }
 
 // async function sendDocument(to, fileUrl, caption, botNumber) {
@@ -506,10 +501,13 @@ app.post('/webhook', async (req, res) => {
         
         const remaining = limit - user.imagesProcessed;
 
-        const documentUrl = forceDocument(url);
+        // const documentUrl = forceDocument(url);
 
-        await sendDocument(from, documentUrl, `✅ Done! ${remaining} left`, botNumber);
-        await sendImage(from, documentUrl, `✅ Done! ${remaining} left`, botNumber);
+        const domain = process.env.RAILWAY_DOMAIN || 'your-domain.com';
+const proxyUrl = `${domain}/file?url=${encodeURIComponent(url)}`;
+
+        await sendDocument(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
+        await sendImage(from, proxyUrl, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
         console.error('❌ Image processing failed:', error);
         await sendMessage(from, `❌ Error processing image:\n\n${error.message}`, botNumber);
@@ -559,6 +557,28 @@ app.post('/webhook', async (req, res) => {
 app.get('/', (req, res) => res.send('✅ Bot running!'));
 
 const PORT = process.env.PORT || 3000;
+
+app.get('/file', async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).send('Missing url');
+
+    const response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 60000
+    });
+
+    res.setHeader('Content-Disposition', 'attachment; filename="output.png"');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', response.data.length);
+
+    return res.send(Buffer.from(response.data));
+  } catch (err) {
+    console.error('❌ File proxy error:', err.message);
+    res.status(500).send('File error');
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n🚀 Server on port ${PORT}\n`);
 });
