@@ -240,13 +240,28 @@ async function sendDocument(to, fileUrl, caption, botNumber) {
       to: `whatsapp:${to}`,
       body: caption,
       mediaUrl: [fileUrl],
-      mediaContentType: ['application/octet-stream']  // 👈 forces document mode
+      mediaContentType: ['image/png'] // 👈 critical
     });
-    console.log(`📄 Document sent to ${to}`);
+    console.log(`📄 PNG document sent to ${to}`);
   } catch (error) {
     console.error('❌ Send document error:', error.message);
   }
 }
+
+// async function sendDocument(to, fileUrl, caption, botNumber) {
+//   try {
+//     await client.messages.create({
+//       from: `whatsapp:${botNumber}`,
+//       to: `whatsapp:${to}`,
+//       body: caption,
+//       mediaUrl: [fileUrl],
+//       mediaContentType: ['application/octet-stream']  // 👈 forces document mode
+//     });
+//     console.log(`📄 Document sent to ${to}`);
+//   } catch (error) {
+//     console.error('❌ Send document error:', error.message);
+//   }
+// }
 
 // Payment endpoints
 app.post('/create-order', async (req, res) => {
@@ -486,7 +501,7 @@ app.post('/webhook', async (req, res) => {
         
         const remaining = limit - user.imagesProcessed;
         await sendDocument(from, url, `✅ Done! ${remaining} left`, botNumber);
-        // await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
+        await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
         console.error('❌ Image processing failed:', error);
         await sendMessage(from, `❌ Error processing image:\n\n${error.message}`, botNumber);
