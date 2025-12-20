@@ -206,6 +206,12 @@ async function uploadToCloudinary(imageBuffer, phoneNumber) {
   }
 }
 
+// --- Force Cloudinary to be served as WhatsApp document ---
+function forceDocument(url) {
+  if (!url) return url;
+  return url.replace('/upload/', '/upload/fl_attachment/');
+}
+
 async function sendMessage(to, body, botNumber) {
   try {
     await client.messages.create({
@@ -239,12 +245,11 @@ async function sendDocument(to, fileUrl, caption, botNumber) {
       from: `whatsapp:${botNumber}`,
       to: `whatsapp:${to}`,
       body: caption,
-      mediaUrl: [fileUrl],
-      mediaContentType: ['image/png'] // 👈 critical
+      mediaUrl: [forceDocument(fileUrl)]
     });
-    console.log(`📄 PNG document sent to ${to}`);
-  } catch (error) {
-    console.error('❌ Send document error:', error.message);
+    console.log('📄 TRUE document sent');
+  } catch (e) {
+    console.error(e.message);
   }
 }
 
@@ -500,8 +505,11 @@ app.post('/webhook', async (req, res) => {
         await user.save();
         
         const remaining = limit - user.imagesProcessed;
-        await sendDocument(from, url, `✅ Done! ${remaining} left`, botNumber);
-        await sendImage(from, url, `✅ Done! ${remaining} left`, botNumber);
+
+        const documentUrl = forceDocument(url);
+
+        await sendDocument(from, documentUrl, `✅ Done! ${remaining} left`, botNumber);
+        await sendImage(from, documentUrl, `✅ Done! ${remaining} left`, botNumber);
       } catch (error) {
         console.error('❌ Image processing failed:', error);
         await sendMessage(from, `❌ Error processing image:\n\n${error.message}`, botNumber);
